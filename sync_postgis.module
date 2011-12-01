@@ -17,15 +17,15 @@ function sync_postgis_menu() {
     'type' => MENU_LOCAL_TASK | MENU_NORMAL_ITEM,
     'file' => 'sync_postgis.admin.inc',
   );
-  $items['admin/config/system/sync-postgis/db'] = array(
-    'title' => 'Sync PostGis Database Set-up',
-    'description' => 'Ensure there is a PostGIS database with a table for us to sync to.',
-    'page callback' => 'drupal_get_form',
-    'page arguments' => array('sync_postgis_check_db_form'),
-    'access arguments' => array('administer site configuration'),
-    'type' => MENU_LOCAL_ACTION,
-    'file' => 'sync_postgis.admin.inc',
-  );
+  //$items['admin/config/system/sync-postgis/db'] = array(
+  //  'title' => 'Sync PostGis Database Set-up',
+  //  'description' => 'Ensure there is a PostGIS database with a table for us to sync to.',
+  //  'page callback' => 'drupal_get_form',
+  //  'page arguments' => array('sync_postgis_check_db_form'),
+  //  'access arguments' => array('administer site configuration'),
+  //  'type' => MENU_LOCAL_ACTION,
+  //  'file' => 'sync_postgis.admin.inc',
+  //);
   return $items;
 }
 
