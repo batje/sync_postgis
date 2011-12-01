@@ -1,92 +1,154 @@
 <?php
 
-function sync_postgis_pgconn(){
-  $pgconn = pg_connect("host=localhost dbname=sync_postgis user=user password=password");
-  if (!$pgconn) {
-    drupal_set_message("Error conecting to postGIS database.",'error');
-  }
-  return $pgconn;
-}
+// The key used for the postgis db in settings.php.
+define('SYNC_POSTGIS_DB', 'sync_postgis');
 
-// We preferentially use presave as it allows other modules to use hook_presave and alter a node while making use of postGIS info
-function sync_postgis_node_presave($node) {
-  if ($node->nid) {
-    sync_postgis_insert_update($node, 'update');
-  }
-  else {
-    sync_postgis_insert_update($node, 'insert');
-  }
-}
-
-function sync_postgis_node_insert($node) {
-  // We've done an insert, time to circle back and fill in the nid on the postgis table
-  $pgconn = sync_postgis_pgconn();
-  foreach ($node->sync_postgis as $row) {
-    $updated = pg_query($pgconn,"UPDATE node SET nid = ".$node->nid." WHERE id = ".$row['postgis_id']);
-  }
-}
-
-function sync_postgis_node_delete($node) {
-  $pgconn = sync_postgis_pgconn();
-  $deleted = pg_query($pgconn,"DELETE from node WHERE nid = ".$node->nid);
-}
-
-function sync_postgis_insert_update(&$node, $op) {
-
-  //@@TODO: Push these out to a config page
-  // node_type => field_name
-  $config = array (
-    'region' => 'field_region_extent',
-    'post' => 'field_post_location',
+/**
+ * Implements hook_menu().
+ */
+function sync_postgis_menu() {
+  $items = array();
+  $items['admin/config/system/sync-postgis'] = array(
+    'title' => 'Sync PostGis Settings',
+    'description' => 'Control which content types get their geofields sync\'d.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('sync_postgis_admin_settings'),
+    'access arguments' => array('administer site configuration'),
+    'type' => MENU_LOCAL_TASK | MENU_NORMAL_ITEM,
+    'file' => 'sync_postgis.admin.inc',
   );
-  
-  //@@TOOD: loop through all possible field / node combinations specified in config
-  if ($field_id = $config[$node->type]) {
-    
-    $field = $node->$field_id;
-    $lang = $node->language;
-    
-    if (!empty($field[$lang][0]['wkt'])) {
-      $pgconn = sync_postgis_pgconn();
-      $node->sync_postgis = array();
-      
-      // Delete any existing values for this node / field
-      if ($op == 'update') {
-        $deleted = pg_query($pgconn,"DELETE from node WHERE nid = ".$node->nid." AND field = '".$field_id."'");
+  $items['admin/config/system/sync-postgis/db'] = array(
+    'title' => 'Sync PostGis Database Set-up',
+    'description' => 'Ensure there is a PostGIS database with a table for us to sync to.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('sync_postgis_check_db_form'),
+    'access arguments' => array('administer site configuration'),
+    'type' => MENU_LOCAL_ACTION,
+    'file' => 'sync_postgis.admin.inc',
+  );
+  return $items;
+}
+
+/**
+ * Implements hook_node_presave().
+ */
+function sync_postgis_node_presave($node) {
+  $fields = sync_postgis_get_geofields($node->type);
+  if (!empty($fields)) {
+    db_set_active(SYNC_POSTGIS_DB);
+    $node->sync_postgis = array();
+    foreach ($fields as $field_name) {
+      sync_postgis_sync($node, $field_name);
+    }
+    db_set_active();
+  }
+}
+
+/**
+ * Syncs a node to the node table in the postgis db.
+ */
+function sync_postgis_sync(&$node, $field_name) {
+  // Keep track of whether we have existing values for each field delta in the
+  // postgis db.
+  $existing = array();
+  if ($node->nid) {
+    $result = db_query("SELECT id, delta from node WHERE nid = :nid AND field = :field", array(':nid' => $node->nid, ':field' => $field_name), array('fetch' => PDO::FETCH_ASSOC))->fetchAll();
+    foreach ($result as $row) {
+      $existing[$row['delta']] = $row['id'];
+    }
+  }
+  $field = $node->{$field_name};
+  $lang = $node->language;
+
+  if (!empty($field[$lang][0]['wkt'])) {
+    $node->sync_postgis[$field_name] = array();
+
+    foreach ($field[$lang] as $delta => $item) {
+      $wkt = $item['wkt'];
+
+      if (empty($existing) || !isset($existing[$delta])) {
+	// Build our insert query.
+	$pg_query = 'INSERT INTO node (nid, type, field, delta, title, geom, geom_albers) VALUES (';
+
+	$pg_query .= $node->nid ? $node->nid . ", " : "NULL, ";
+	$pg_query .= "'".$node->type."', '".$field_name."', '".$delta."', '".pg_escape_string($node->title)."', ";
+	$pg_query .= "GeomFromText('" . $wkt . "', 4326)".", ";
+	$pg_query .= "st_transform(GeomFromText('" . $wkt . "', 4326), 3005)";
+	$pg_query .= ") RETURNING id;";
+
+	try {
+	  $result = db_query($pg_query);
+	  try {
+	    // Grab the last insert id from pg.
+	    $pgid = db_query("SELECT currval('node_id_seq') FROM node")->fetchField();
+	    $node->sync_postgis[$field_name][$delta] = $pgid;
+	  }
+	  catch (Exception $e) {
+	    watchdog_exception('sync_postgis', $e);
+	  }
+	}
+	catch (Exception $e) {
+	  watchdog_exception('sync_postgis', $e);
+	}
       }
-      
-      foreach ($field[$lang] as $delta => $item) {
-        $wkt = $item['wkt'];
-  	    $pg_query = "INSERT INTO node (nid, type, field, delta, title, geom, geom_albers) VALUES (";
-  	    
-  	    // Mark nid as null if we are doing an insert
-  	    if ($op == 'update') {
-  	      $pg_query .= $node->nid.", ";
-  	    }
-  	    if ($op == 'insert') {
-  	      $pg_query .= "NULL, ";
-  	    }
-  	    
-  	    $pg_query .= "'".$node->type."', ";
-  	    $pg_query .= "'".$field_id."', ";
-  	    $pg_query .= "'".$delta."', ";
-  	    $pg_query .= "'".pg_escape_string($node->title)."', ";
-  	    $pg_query .= "GeomFromText('".$wkt."', 4326)".", ";
-  	    $pg_query .= "st_transform(GeomFromText('".$wkt."', 4326), 3005)";
-  	    $pg_query .= ") RETURNING id;";
-  	          
-  	    $result = pg_query($pgconn,$pg_query);
-  	    
-  	    //@@TODO: Store this in a sync_postgis mysql table so that it persists when a node is saved
-  	    $postgis_id = pg_fetch_object($result);
-  	    $node->sync_postgis[$postgis_id->id] = array (
-  	      'postgis_id' => $postgis_id->id,
-  	      'nid' => $node->nid,
-  	      'field' => $field_id,
-  	      'delta' => $delta,
-  	    );
-  	  }
+      else {
+	// Update the record in postgis for this field value.
+	$pg_query = "UPDATE node SET title = '" .
+	  pg_escape_string($node->title) . "', geom = " .
+	  "GeomFromText('" . $wkt . "', 4326), geom_albers = " .
+	  "st_transform(GeomFromText('" . $wkt . "', 4326), 3005)" .
+	  " WHERE id = :id";
+	db_query($pg_query, array(':id' => $existing[$delta]));
+      }
+    }
+  }
+  else if (!empty($existing)) {
+    // Delete existing records from the postgis db as the node no longer has
+    // values for this field.
+    foreach ($existing as $delta => $id) {
+      db_query("DELETE from node WHERE id = :id", array(':id' => $id));
     }
   }
 }
 
+/**
+ * Implements hook_node_insert().
+ */
+function sync_postgis_node_insert($node) {
+  // Update the nid column in the postgis table.
+  if ($node->sync_postgis && !empty($node->sync_postgis)) {
+    db_set_active(SYNC_POSTGIS_DB);
+    $ids = array();
+    foreach($node->sync_postgis as $field_name => $values) {
+      $ids = array_merge($ids, $values);
+    }
+    // Update the record in postgis for this field value.
+    $pg_query = "UPDATE node SET nid = :nid" .
+		" WHERE id IN (" . implode(',', $ids) . ")";
+    db_query($pg_query, array(':nid' => $node->nid));
+    db_set_active();
+  }
+}
+
+/**
+ * Implements hook_node_delete().
+ */
+function sync_postgis_node_delete($node) {
+  db_set_active(SYNC_POSTGIS_DB);
+  // Delete the node record from postgis.
+  $pg_query = "DELETE FROM node WHERE nid = :nid";
+  db_query($pg_query, array(':nid' => $node->nid));
+  db_set_active();
+}
+
+/**
+ * Gets and statically stores the list of geo fields per content type.
+ */
+function sync_postgis_get_geofields($type) {
+  $fields = &drupal_static(__FUNCTION__, array());
+  if (isset($fields[$type])) {
+    return $fields[$type];
+  }
+  $fields[$type] = array_filter(variable_get('sync_postgis_enabled_' . $type, array()));
+  return $fields[$type];
+}

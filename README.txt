@@ -20,7 +20,29 @@ http://blog.smartlogicsolutions.com/2010/03/04/installing-postgis-1-5-0-on-postg
 
 3. Create your postgres user and check permissions
 
-4. Install module!
+4. Add a 'sync_postgis' database in settings.php, e.g.:
+$databases = array (
+  'default' =>
+  array (
+    'default' =>
+      array(...)
+  ),
+  'sync_postgis' =>
+  array(
+    'default' =>
+    array(
+      'driver' => 'pgsql',
+      'database' => 'my_postgis_db',
+      'username' => 'postgres',
+      'password' => 'postgres',
+      'host' => 'localhost',
+      'port' => '',
+      'prefix' => '',
+    )
+  )
+);
+
+5. Install module!
 
 
 Use
