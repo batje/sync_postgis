@@ -26,6 +26,15 @@ function sync_postgis_menu() {
   //  'type' => MENU_LOCAL_ACTION,
   //  'file' => 'sync_postgis.admin.inc',
   //);
+  $items['admin/config/system/sync-postgis/bulk'] = array(
+    'title' => 'Bulk sync content to PostGIS',
+    'description' => 'Goes through all geofield data that has been configured to be syncd to PostGIS and syncs it all using a job queue.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('sync_postgis_bulk_sync'),
+    'access arguments' => array('administer site configuration'),
+    'type' => MENU_LOCAL_ACTION,
+    'file' => 'sync_postgis.admin.inc',
+  );
   return $items;
 }
 
@@ -151,4 +160,29 @@ function sync_postgis_get_geofields($type) {
   }
   $fields[$type] = array_filter(variable_get('sync_postgis_enabled_' . $type, array()));
   return $fields[$type];
+}
+
+/**
+ * Implements hook_cron_queue_info().
+ */
+function sync_postgis_cron_queue_info() {
+  $queues['sync_postgis_queue'] = array(
+    'worker callback' => 'sync_postgis_queue_process_item',
+    'time' => 60,
+  );
+  return $queues;
+}
+
+/**
+ * Syncs a single queued item.
+ */
+function sync_postgis_queue_process_item($item) {
+  // Call whatever function will sync this item.
+  if (isset($item['nid'])) {
+    // We just need to call node_save on the node in order to force it to get
+    // syncd to the PostGIS db.
+    $node = node_load($item['nid']);
+    node_save($node);
+    drupal_set_message(t('Processed %title', array('%title' => $item['title'])));
+  }
 }
