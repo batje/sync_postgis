@@ -27,15 +27,15 @@ SET default_with_oids = true;
 --
 
 COPY geometry_columns (f_table_catalog, f_table_schema, f_table_name, f_geometry_column, coord_dimension, srid, type) FROM stdin;
-	public	node	geom	2	4326	GEOMETRY
-	public	node	geom_albers	2	3005	GEOMETRY
+	public	pg_node	geom	2	4326	GEOMETRY
+	public	pg_node	geom_albers	2	3005	GEOMETRY
 \.
 
 --
--- Name: node; Type: TABLE; Schema: public; Owner: fnfn; Tablespace: 
+-- Name: pg_node; Type: TABLE; Schema: public; Owner: fnfn; Tablespace: 
 --
 
-CREATE TABLE node (
+CREATE TABLE pg_node (
     id serial PRIMARY KEY,
     nid integer,
     type text,
@@ -54,14 +54,14 @@ CREATE TABLE node (
 -- Name: node_spatial_index_geom; Type: INDEX; Schema: public; Owner: fnfn; Tablespace: 
 --
 
-CREATE INDEX node_spatial_index_geom ON node USING gist (geom);
+CREATE INDEX node_spatial_index_geom ON pg_node USING gist (geom);
 
 
 --
 -- Name: node_spatial_index_geom_albers; Type: INDEX; Schema: public; Owner: fnfn; Tablespace: 
 --
 
-CREATE INDEX node_spatial_index_geom_albers ON node USING gist (geom_albers);
+CREATE INDEX node_spatial_index_geom_albers ON pg_node USING gist (geom_albers);
 
 
 

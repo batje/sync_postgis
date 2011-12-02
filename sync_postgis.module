@@ -52,7 +52,7 @@ function sync_postgis_sync(&$node, $field_name) {
   // postgis db.
   $existing = array();
   if ($node->nid) {
-    $result = db_query("SELECT id, delta from node WHERE nid = :nid AND field = :field", array(':nid' => $node->nid, ':field' => $field_name), array('fetch' => PDO::FETCH_ASSOC))->fetchAll();
+    $result = db_query("SELECT id, delta from {pg_node} WHERE nid = :nid AND field = :field", array(':nid' => $node->nid, ':field' => $field_name), array('fetch' => PDO::FETCH_ASSOC))->fetchAll();
     foreach ($result as $row) {
       $existing[$row['delta']] = $row['id'];
     }
@@ -68,7 +68,7 @@ function sync_postgis_sync(&$node, $field_name) {
 
       if (empty($existing) || !isset($existing[$delta])) {
 	// Build our insert query.
-	$pg_query = 'INSERT INTO node (nid, type, field, delta, title, geom, geom_albers) VALUES (';
+	$pg_query = 'INSERT INTO {pg_node} (nid, type, field, delta, title, geom, geom_albers) VALUES (';
 
 	$pg_query .= $node->nid ? $node->nid . ", " : "NULL, ";
 	$pg_query .= "'".$node->type."', '".$field_name."', '".$delta."', '".pg_escape_string($node->title)."', ";
@@ -80,7 +80,7 @@ function sync_postgis_sync(&$node, $field_name) {
 	  $result = db_query($pg_query);
 	  try {
 	    // Grab the last insert id from pg.
-	    $pgid = db_query("SELECT currval('node_id_seq') FROM node")->fetchField();
+	    $pgid = db_query("SELECT currval('node_id_seq') FROM {pg_node}")->fetchField();
 	    $node->sync_postgis[$field_name][$delta] = $pgid;
 	  }
 	  catch (Exception $e) {
@@ -93,7 +93,7 @@ function sync_postgis_sync(&$node, $field_name) {
       }
       else {
 	// Update the record in postgis for this field value.
-	$pg_query = "UPDATE node SET title = '" .
+	$pg_query = "UPDATE {pg_node} SET title = '" .
 	  pg_escape_string($node->title) . "', geom = " .
 	  "GeomFromText('" . $wkt . "', 4326), geom_albers = " .
 	  "st_transform(GeomFromText('" . $wkt . "', 4326), 3005)" .
@@ -106,7 +106,7 @@ function sync_postgis_sync(&$node, $field_name) {
     // Delete existing records from the postgis db as the node no longer has
     // values for this field.
     foreach ($existing as $delta => $id) {
-      db_query("DELETE from node WHERE id = :id", array(':id' => $id));
+      db_query("DELETE from {pg_node} WHERE id = :id", array(':id' => $id));
     }
   }
 }
@@ -123,7 +123,7 @@ function sync_postgis_node_insert($node) {
       $ids = array_merge($ids, $values);
     }
     // Update the record in postgis for this field value.
-    $pg_query = "UPDATE node SET nid = :nid" .
+    $pg_query = "UPDATE {pg_node} SET nid = :nid" .
 		" WHERE id IN (" . implode(',', $ids) . ")";
     db_query($pg_query, array(':nid' => $node->nid));
     db_set_active();
@@ -136,7 +136,7 @@ function sync_postgis_node_insert($node) {
 function sync_postgis_node_delete($node) {
   db_set_active(SYNC_POSTGIS_DB);
   // Delete the node record from postgis.
-  $pg_query = "DELETE FROM node WHERE nid = :nid";
+  $pg_query = "DELETE FROM {pg_node} WHERE nid = :nid";
   db_query($pg_query, array(':nid' => $node->nid));
   db_set_active();
 }
