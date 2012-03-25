@@ -17,15 +17,15 @@ function sync_postgis_menu() {
     'type' => MENU_LOCAL_TASK | MENU_NORMAL_ITEM,
     'file' => 'sync_postgis.admin.inc',
   );
-  //$items['admin/config/system/sync-postgis/db'] = array(
-  //  'title' => 'Sync PostGis Database Set-up',
-  //  'description' => 'Ensure there is a PostGIS database with a table for us to sync to.',
-  //  'page callback' => 'drupal_get_form',
-  //  'page arguments' => array('sync_postgis_check_db_form'),
-  //  'access arguments' => array('administer site configuration'),
-  //  'type' => MENU_LOCAL_ACTION,
-  //  'file' => 'sync_postgis.admin.inc',
-  //);
+  $items['admin/config/system/sync-postgis/db'] = array(
+    'title' => 'Sync PostGis Database Set-up',
+    'description' => 'Ensure there is a PostGIS database with a table for us to sync to.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('sync_postgis_check_db_form'),
+    'access arguments' => array('administer site configuration'),
+    'type' => MENU_LOCAL_ACTION,
+    'file' => 'sync_postgis.admin.inc',
+  );
   $items['admin/config/system/sync-postgis/bulk'] = array(
     'title' => 'Bulk sync content to PostGIS',
     'description' => 'Goes through all geofield data that has been configured to be syncd to PostGIS and syncs it all using a job queue.',
@@ -60,6 +60,7 @@ function sync_postgis_sync(&$node, $field_name) {
   // Keep track of whether we have existing values for each field delta in the
   // postgis db.
   $existing = array();
+  db_set_active(SYNC_POSTGIS_DB);
   if ($node->nid) {
     $result = db_query("SELECT id, delta from {pg_node} WHERE nid = :nid AND field = :field", array(':nid' => $node->nid, ':field' => $field_name), array('fetch' => PDO::FETCH_ASSOC))->fetchAll();
     foreach ($result as $row) {
@@ -74,43 +75,45 @@ function sync_postgis_sync(&$node, $field_name) {
 
     foreach ($field[$lang] as $delta => $item) {
       $wkt = $item['wkt'];
-
+      $pgid = 0;
       if (empty($existing) || !isset($existing[$delta])) {
-	// Build our insert query.
-	$pg_query = 'INSERT INTO {pg_node} (nid, type, field, delta, title, geom, geom_albers) VALUES (';
+        // Build our insert query.
+        $pg_query = 'INSERT INTO {pg_node} (nid, type, field, delta, title, geom, geom_albers) VALUES (';
 
-	$pg_query .= $node->nid ? $node->nid . ", " : "NULL, ";
-	$pg_query .= "'".$node->type."', '".$field_name."', '".$delta."', '".pg_escape_string($node->title)."', ";
-	$pg_query .= "GeomFromText('" . $wkt . "', 4326)".", ";
-	$pg_query .= "st_transform(GeomFromText('" . $wkt . "', 4326), 3005)";
-	$pg_query .= ") RETURNING id;";
-
-	try {
-	  $result = db_query($pg_query);
-	  try {
-	    // Grab the last insert id from pg.
-	    $pgid = db_query("SELECT currval('node_id_seq') FROM {pg_node}")->fetchField();
-	  }
-	  catch (Exception $e) {
-	    watchdog_exception('sync_postgis', $e);
-	  }
-	}
-	catch (Exception $e) {
-	  watchdog_exception('sync_postgis', $e);
-	}
+        $pg_query .= $node->nid ? $node->nid . ", " : "NULL, ";
+        $pg_query .= "'".$node->type."', '".$field_name."', '".$delta."', '".pg_escape_string($node->title)."', ";
+        $pg_query .= "GeomFromText('" . $wkt . "', 4326)".", ";
+        $pg_query .= "st_transform(GeomFromText('" . $wkt . "', 4326), 3005)";
+        $pg_query .= ") RETURNING id;";
+        try {
+          $result = db_query($pg_query);
+          try {
+            // Grab the last insert id from pg.
+            $pgid = db_query("SELECT currval('pg_node_id_seq') FROM {pg_node}")->fetchField();
+          }
+          catch (Exception $e) {
+            watchdog_exception('sync_postgis', $e);
+            db_set_active();
+          }
+        }
+        catch (Exception $e) {
+          watchdog_exception('sync_postgis', $e);
+          db_set_active();
+        }
       }
       else {
-	// Update the record in postgis for this field value.
-	$pg_query = "UPDATE {pg_node} SET title = '" .
-	  pg_escape_string($node->title) . "', geom = " .
-	  "GeomFromText('" . $wkt . "', 4326), geom_albers = " .
-	  "st_transform(GeomFromText('" . $wkt . "', 4326), 3005)" .
-	  " WHERE id = :id";
-	db_query($pg_query, array(':id' => $existing[$delta]));
-	$pgid = $existing[$delta];
+        // Update the record in postgis for this field value.
+        $pg_query = "UPDATE {pg_node} SET title = '" .
+          pg_escape_string($node->title) . "', geom = " .
+          "GeomFromText('" . $wkt . "', 4326), geom_albers = " .
+          "st_transform(GeomFromText('" . $wkt . "', 4326), 3005)" .
+          " WHERE id = :id";
+        db_query($pg_query, array(':id' => $existing[$delta]));
+        $pgid = $existing[$delta];
+        db_set_active();
       }
       if ($pgid) {
-	$node->sync_postgis[$field_name][$delta] = $pgid;
+        $node->sync_postgis[$field_name][$delta] = $pgid;
       }
     }
   }
@@ -118,7 +121,9 @@ function sync_postgis_sync(&$node, $field_name) {
     // Delete existing records from the postgis db as the node no longer has
     // values for this field.
     foreach ($existing as $delta => $id) {
+      db_set_active(SYNC_POSTGIS_DB);
       db_query("DELETE from {pg_node} WHERE id = :id", array(':id' => $id));
+      db_set_active();
     }
   }
 }
@@ -129,16 +134,17 @@ function sync_postgis_sync(&$node, $field_name) {
 function sync_postgis_node_insert($node) {
   // Update the nid column in the postgis table.
   if ($node->sync_postgis && !empty($node->sync_postgis)) {
-    db_set_active(SYNC_POSTGIS_DB);
     $ids = array();
     foreach($node->sync_postgis as $field_name => $values) {
       $ids = array_merge($ids, $values);
     }
-    // Update the record in postgis for this field value.
-    $pg_query = "UPDATE {pg_node} SET nid = :nid" .
-		" WHERE id IN (" . implode(',', $ids) . ")";
-    db_query($pg_query, array(':nid' => $node->nid));
-    db_set_active();
+    if (count($ids) > 0 ) {
+      db_set_active(SYNC_POSTGIS_DB);
+      // Update the record in postgis for this field value.
+      $pg_query = "UPDATE {pg_node} SET nid = :nid WHERE id IN (" . implode(',', $ids) . ")";
+      db_query($pg_query, array(':nid' => $node->nid));
+      db_set_active();
+    }
   }
 }
 

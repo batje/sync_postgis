@@ -9,7 +9,7 @@ function sync_postgis_admin_settings() {
   foreach ($instances as $bundle_name => $fields) {
     $options = array();
     foreach ($fields as $name => $info) {
-      if ($info['widget']['module'] == 'geofield') {
+      if (($info['widget']['module'] == 'geofield') || ($info['widget']['module'] == 'geocoder')) {
         $options[$name] = $info['label'];
       }
     }
@@ -78,22 +78,22 @@ function sync_postgis_bulk_sync_submit($form, &$form_state) {
 /**
  * Ensure we can connect to PostGIS and our table exists.
  */
-//function sync_postgis_check_db_form($form, &$form_state) {
-//  db_set_active(SYNC_POSTGIS_DB);
-//  if (!db_table_exists('node')) {
-//    $form['create_table'] = array(
-//      '#type' => 'submit',
-//      '#value' => 'Create PostGis Node table',
-//    );
-//    db_set_active();
-//  }
-//  else {
-//    db_set_active();
-//    drupal_set_message('The node table already exists in your postgis database');
-//  }
-//  return $form;
-//}
-//
+function sync_postgis_check_db_form($form, &$form_state) {
+  db_set_active(SYNC_POSTGIS_DB);
+  if (!db_table_exists('node')) {
+    $form['create_table'] = array(
+      '#type' => 'submit',
+      '#value' => 'Create PostGis Node table',
+    );
+    db_set_active();
+  }
+  else {
+    db_set_active();
+    drupal_set_message('The node table already exists in your postgis database');
+  }
+  return $form;
+}
+
 //function sync_postgis_check_db_form_submit($form, &$form_state) {
 //  db_set_active(SYNC_POSTGIS_DB);
 //  try {
